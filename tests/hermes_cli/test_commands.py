@@ -143,6 +143,7 @@ class TestDerivedDicts:
         assert "/exit" in COMMANDS
         assert "/reload_mcp" in COMMANDS
         assert "/gateway" in COMMANDS
+        assert "/rck" in COMMANDS
 
     def test_commands_by_category_covers_all_categories(self):
         registry_categories = {cmd.category for cmd in COMMAND_REGISTRY if not cmd.gateway_only}
