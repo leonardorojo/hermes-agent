@@ -16,7 +16,7 @@ Usage:
 import logging
 import os
 import shutil
-import sys
+import subprocess
 import json
 import re
 import concurrent.futures
@@ -6481,6 +6481,8 @@ class HermesCLI:
             self._handle_copy_command(cmd_original)
         elif canonical == "debug":
             self._handle_debug_command()
+        elif canonical == "rck":
+            self._handle_rck_command(cmd_original)
         elif canonical == "paste":
             self._handle_paste_command()
         elif canonical == "image":
@@ -7604,6 +7606,10 @@ class HermesCLI:
 
         args = SimpleNamespace(lines=200, expire=7, local=False)
         run_debug_share(args)
+
+    def _handle_rck_command(self, cmd_original: str) -> None:
+        from hermes_cli.rck import handle_rck_command
+        handle_rck_command(self, cmd_original)
 
     def _show_usage(self):
         """Show rate limits (if available) and session token usage."""
