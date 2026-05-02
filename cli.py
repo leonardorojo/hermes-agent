@@ -26,7 +26,7 @@ except ModuleNotFoundError:
 import logging
 import os
 import shutil
-import sys
+import subprocess
 import json
 import re
 import concurrent.futures
@@ -7519,6 +7519,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
             from hermes_cli.main import _print_version_info
 
             _print_version_info(check_updates=True)
+        elif canonical == "rck":
+            self._handle_rck_command(cmd_original)
         elif canonical == "paste":
             self._handle_paste_command()
         elif canonical == "image":
@@ -8254,6 +8256,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 print(f"  ❌ Compression failed: {e}")
 
 
+
+    def _handle_rck_command(self, cmd_original: str) -> None:
+        from hermes_cli.rck import handle_rck_command
+        handle_rck_command(self, cmd_original)
 
     def _show_usage(self):
         """Rate limits + session token usage (when a live agent exists) + Nous credits.
