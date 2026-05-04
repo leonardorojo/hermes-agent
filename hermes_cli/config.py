@@ -448,6 +448,8 @@ def recommended_update_command_for_method(method: str) -> str:
 
 def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
+    if os.environ.get("RCKHERMES") == "1":
+        return "rckhermes update"
     managed_cmd = get_managed_update_command()
     if managed_cmd:
         return managed_cmd
@@ -534,6 +536,7 @@ def format_managed_message(action: str = "modify this Hermes installation") -> s
         f"Cannot {action}: this Hermes installation is managed by {managed_system}.\n"
         "Use your package manager to upgrade or reinstall Hermes."
     )
+
 
 def managed_error(action: str = "modify configuration"):
     """Print user-friendly error for managed mode."""
