@@ -207,6 +207,26 @@ def _parse_state_id(stdout: str) -> str | None:
     return match.group(1).strip() or None
 
 
+def _parse_anchor_id(stdout: str) -> str | None:
+    match = re.search(r"(?im)^\s*AnchorId:\s*(\S+)\s*$", stdout or "")
+    if not match:
+        return None
+    return match.group(1).strip() or None
+
+
+def _parse_anchor_command(cmd_original: str) -> tuple[bool, str | None]:
+    parts = shlex.split(cmd_original)
+    tokens = parts[2:]
+    if tokens and tokens[0] == "promote":
+        return True, None
+    label = " ".join(tokens).strip()
+    return False, label or None
+
+
+def _default_anchor_label() -> str:
+    return "Assisted RCK anchor"
+
+
 def _parse_state_command(cmd_original: str) -> tuple[bool, str | None]:
     parts = shlex.split(cmd_original)
     tokens = parts[2:]
@@ -293,6 +313,83 @@ def handle_rck_state(cli: Any, cmd_original: str) -> None:
     save_rck_session_state(cli, updated)
     if not result.stdout:
         cli._console_print(f"RCK state recorded: {state_id}")
+
+
+def handle_rck_anchor(cli: Any, cmd_original: str) -> None:
+    """Handle `/rck anchor` as an assisted anchor-promotion helper."""
+    try:
+        parts = shlex.split(cmd_original)
+        is_passthrough, label = _parse_anchor_command(cmd_original)
+    except ValueError as exc:
+        cli._console_print(f"Invalid /rck command: {exc}")
+        return
+
+    if is_passthrough:
+        result = run_rck_subcommand(getattr(cli, "config", {}) or {}, "anchor", parts[2:])
+        if result is None:
+            cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+            return
+        if result.stdout:
+            cli._console_print(result.stdout.rstrip())
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                cli._console_print(f"RCK error: {stderr}")
+            cli._console_print(f"RCK exited with code {result.returncode}")
+        elif result.stderr:
+            stderr = result.stderr.strip()
+            if stderr:
+                cli._console_print(f"RCK warning: {stderr}")
+        return
+
+    state = load_rck_session_state(cli)
+    if not state.current_trace_id:
+        cli._console_print("No active RCK trace. Run /rck init first.")
+        return
+    if not state.last_state_id:
+        cli._console_print("No RCK state available. Run /rck state first.")
+        return
+
+    effective_label = label or _default_anchor_label()
+    result = run_rck_subcommand(
+        getattr(cli, "config", {}) or {},
+        "anchor",
+        [
+            "promote",
+            state.current_trace_id,
+            "--state-id",
+            state.last_state_id,
+            "--label",
+            effective_label,
+        ],
+    )
+    if result is None:
+        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+        return
+
+    if result.stdout:
+        cli._console_print(result.stdout.rstrip())
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            cli._console_print(f"RCK error: {stderr}")
+        cli._console_print(f"RCK exited with code {result.returncode}")
+        return
+    elif result.stderr:
+        stderr = result.stderr.strip()
+        if stderr:
+            cli._console_print(f"RCK warning: {stderr}")
+
+    anchor_id = _parse_anchor_id(result.stdout or "")
+    if not anchor_id:
+        cli._console_print("Warning: RCK anchor output did not include AnchorId.")
+        return
+
+    updated = replace(state, last_anchor_id=anchor_id)
+    save_rck_session_state(cli, updated)
+    if not result.stdout:
+        cli._console_print(f"RCK anchor recorded: {anchor_id}")
+
 
 
 def handle_rck_init(

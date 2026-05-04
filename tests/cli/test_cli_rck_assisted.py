@@ -14,6 +14,7 @@ from hermes_cli.rck_assisted import (
     default_trace_id,
     derive_label_from_trace_id,
     format_rck_current_state,
+    handle_rck_anchor,
     handle_rck_current,
     handle_rck_init,
     handle_rck_state,
@@ -304,6 +305,145 @@ class TestRckState:
         handle_rck_current(cli, "/rck current")
         output = cli._console_print.call_args.args[0]
         assert "- last_state_id: state-123" in output
+
+
+
+class TestRckAnchor:
+    def test_anchor_with_no_active_trace_shows_message_and_does_not_call_subprocess(self):
+        cli = _make_cli()
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            handle_rck_anchor(cli, "/rck anchor")
+
+        mock_run.assert_not_called()
+        cli._console_print.assert_called_once()
+        assert "No active RCK trace. Run /rck init first." in str(cli._console_print.call_args)
+
+    def test_anchor_with_no_state_shows_message_and_does_not_call_subprocess(self):
+        cli = _make_cli()
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            handle_rck_anchor(cli, "/rck anchor")
+
+        mock_run.assert_not_called()
+        cli._console_print.assert_called_once()
+        assert "No RCK state available. Run /rck state first." in str(cli._console_print.call_args)
+
+    def test_anchor_with_active_trace_and_state_uses_default_label_and_persists_anchor_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id="state-1",
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="AnchorId: anchor-123\n", stderr="")
+            handle_rck_anchor(cli, "/rck anchor")
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[1] == "anchor"
+        assert args[2] == [
+            "promote",
+            "trace-1",
+            "--state-id",
+            "state-1",
+            "--label",
+            "Assisted RCK anchor",
+        ]
+        assert kwargs == {}
+        assert json.loads(db.raw)["last_anchor_id"] == "anchor-123"
+        assert cli._rck_session_state.last_anchor_id == "anchor-123"
+
+    def test_anchor_with_custom_label_uses_label(self):
+        cli = _make_cli()
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id="state-1",
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="AnchorId: anchor-123\n", stderr="")
+            handle_rck_anchor(cli, '/rck anchor "Validated assisted anchor promotion through Hermes."')
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[2][-2:] == ["--label", "Validated assisted anchor promotion through Hermes."]
+        assert kwargs == {}
+
+    def test_anchor_missing_anchor_id_warns_without_inventing_one(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id="state-1",
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="created\n", stderr="")
+            handle_rck_anchor(cli, "/rck anchor")
+
+        mock_run.assert_called_once()
+        assert cli._rck_session_state.last_anchor_id is None
+        assert db.raw is None
+        warning_calls = [call.args[0] for call in cli._console_print.call_args_list]
+        assert any("did not include AnchorId" in msg for msg in warning_calls)
+
+    def test_anchor_with_explicit_promote_is_passthrough(self):
+        cli = _make_cli()
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="AnchorId: anchor-1\n", stderr="")
+            handle_rck_anchor(cli, "/rck anchor promote trace-1 --state-id state-1 --label foo")
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[1] == "anchor"
+        assert args[2] == ["promote", "trace-1", "--state-id", "state-1", "--label", "foo"]
+        assert kwargs == {}
+        cli._console_print.assert_called_once()
+        assert "AnchorId: anchor-1" in str(cli._console_print.call_args)
+
+    def test_current_after_anchor_shows_last_anchor_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id="state-1",
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="AnchorId: anchor-123\n", stderr="")
+            handle_rck_anchor(cli, "/rck anchor")
+
+        handle_rck_current(cli, "/rck current")
+        output = cli._console_print.call_args.args[0]
+        assert "- last_anchor_id: anchor-123" in output
 
 
 class TestRckCliDispatcher:
