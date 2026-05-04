@@ -164,7 +164,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
 
     try:
         result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD..origin/main"],
+            ["git", "rev-list", "--count", "HEAD..upstream/main" if os.environ.get("RCKHERMES") == "1" else "HEAD..origin/main"],
             capture_output=True, text=True, timeout=5,
             cwd=str(repo_dir),
         )
@@ -187,7 +187,7 @@ def check_for_updates() -> Optional[int]:
     the check failed or doesn't apply. Cached for 6 hours.
     """
     hermes_home = get_hermes_home()
-    cache_file = hermes_home / ".update_check"
+    cache_file = hermes_home / (".update_check_rck" if os.environ.get("RCKHERMES") == "1" else ".update_check")
     embedded_rev = os.environ.get("HERMES_REVISION") or None
 
     # Read cache — invalidate if the embedded rev has changed since last check
@@ -223,6 +223,9 @@ def check_for_updates() -> Optional[int]:
 
 def _resolve_repo_dir() -> Optional[Path]:
     """Return the active Hermes git checkout, or None if this isn't a git install."""
+    if os.environ.get("RCKHERMES") == "1":
+        repo_dir = Path(__file__).parent.parent.resolve()
+        return repo_dir if (repo_dir / ".git").exists() else None
     hermes_home = get_hermes_home()
     repo_dir = hermes_home / "hermes-agent"
     if not (repo_dir / ".git").exists():
@@ -254,7 +257,7 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     if repo_dir is None:
         return None
 
-    upstream = _git_short_hash(repo_dir, "origin/main")
+    upstream = _git_short_hash(repo_dir, "upstream/main" if os.environ.get("RCKHERMES") == "1" else "origin/main")
     local = _git_short_hash(repo_dir, "HEAD")
     if not upstream or not local:
         return None
@@ -262,7 +265,7 @@ def get_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]:
     ahead = 0
     try:
         result = subprocess.run(
-            ["git", "rev-list", "--count", "origin/main..HEAD"],
+            ["git", "rev-list", "--count", "upstream/main..HEAD" if os.environ.get("RCKHERMES") == "1" else "origin/main..HEAD"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -589,20 +592,31 @@ def build_welcome_banner(console: Console, model: str, cwd: str,
         behind = get_update_result(timeout=0.5)
         if behind is not None and behind != 0:
             from hermes_cli.config import get_managed_update_command, recommended_update_command
+            is_rck = os.environ.get("RCKHERMES") == "1"
             if behind > 0:
                 commits_word = "commit" if behind == 1 else "commits"
-                right_lines.append(
-                    f"[bold yellow]⚠ {behind} {commits_word} behind[/]"
-                    f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
-                )
+                if is_rck:
+                    right_lines.append(
+                        f"[bold yellow]⚠ RCK Hermes fork may be {behind} {commits_word} behind upstream[/]"
+                        f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] or [bold]rckhermes status[/bold][/]"
+                    )
+                else:
+                    right_lines.append(
+                        f"[bold yellow]⚠ {behind} {commits_word} behind[/]"
+                        f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
+                    )
             else:
                 # UPDATE_AVAILABLE_NO_COUNT: nix-built hermes; we know an update
                 # exists but not by how much, and we don't know how the user
                 # installed it (nix run, profile, system flake, home-manager).
                 managed_cmd = get_managed_update_command()
                 line = "[bold yellow]⚠ update available[/]"
+                if is_rck:
+                    line = "[bold yellow]⚠ RCK Hermes fork may be behind upstream[/]"
                 if managed_cmd:
                     line += f"[dim yellow] — run [bold]{managed_cmd}[/bold][/]"
+                elif is_rck:
+                    line += f"[dim yellow] — run [bold]rckhermes status[/bold] or [bold]rckhermes update[/bold][/]"
                 right_lines.append(line)
     except Exception:
         pass  # Never break the banner over an update check

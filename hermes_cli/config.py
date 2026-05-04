@@ -150,6 +150,8 @@ def get_managed_update_command() -> Optional[str]:
 
 def recommended_update_command() -> str:
     """Return the best update command for the current installation."""
+    if os.environ.get("RCKHERMES") == "1":
+        return "rckhermes update"
     return get_managed_update_command() or "hermes update"
 
 
