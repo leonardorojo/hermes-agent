@@ -137,6 +137,29 @@ def handle_rck_command(cli: Any, cmd: str) -> None:
 
         handle_rck_init(cli, cmd)
         return
+    if subcommand == "state":
+        if args and args[0] == "add":
+            result = run_rck_subcommand(getattr(cli, "config", {}) or {}, subcommand, args)
+            if result is None:
+                cli._console_print(f"  RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+                return
+            if result.stdout:
+                cli._console_print(result.stdout.rstrip())
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                if stderr:
+                    cli._console_print(f"  RCK error: {stderr}")
+                cli._console_print(f"  RCK exited with code {result.returncode}")
+            elif result.stderr:
+                stderr = result.stderr.strip()
+                if stderr:
+                    cli._console_print(f"  RCK warning: {stderr}")
+            return
+
+        from hermes_cli.rck_assisted import handle_rck_state
+
+        handle_rck_state(cli, cmd)
+        return
 
     if subcommand not in ALLOWED_RCK_SUBCOMMANDS:
         cli._console_print(f"  Unsupported RCK subcommand: {subcommand}")

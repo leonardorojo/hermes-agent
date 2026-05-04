@@ -200,6 +200,101 @@ def _parse_init_command(cmd_original: str) -> tuple[str | None, str | None]:
     return trace_id, label
 
 
+def _parse_state_id(stdout: str) -> str | None:
+    match = re.search(r"(?im)^\s*StateId:\s*(\S+)\s*$", stdout or "")
+    if not match:
+        return None
+    return match.group(1).strip() or None
+
+
+def _parse_state_command(cmd_original: str) -> tuple[bool, str | None]:
+    parts = shlex.split(cmd_original)
+    tokens = parts[2:]
+    if tokens and tokens[0] == "add":
+        return True, None
+    summary = " ".join(tokens).strip()
+    return False, summary or None
+
+
+def _default_state_summary(state: RckSessionState) -> str:
+    return "Assisted RCK state"
+
+
+def handle_rck_state(cli: Any, cmd_original: str) -> None:
+    """Handle `/rck state` as an assisted state snapshot helper."""
+    try:
+        parts = shlex.split(cmd_original)
+        is_passthrough, summary = _parse_state_command(cmd_original)
+    except ValueError as exc:
+        cli._console_print(f"Invalid /rck command: {exc}")
+        return
+
+    if is_passthrough:
+        result = run_rck_subcommand(getattr(cli, "config", {}) or {}, "state", parts[2:])
+        if result is None:
+            cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+            return
+        if result.stdout:
+            cli._console_print(result.stdout.rstrip())
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                cli._console_print(f"RCK error: {stderr}")
+            cli._console_print(f"RCK exited with code {result.returncode}")
+        elif result.stderr:
+            stderr = result.stderr.strip()
+            if stderr:
+                cli._console_print(f"RCK warning: {stderr}")
+        return
+
+    state = load_rck_session_state(cli)
+    if not state.current_trace_id:
+        cli._console_print("No active RCK trace. Run /rck init first.")
+        return
+
+    effective_summary = summary or _default_state_summary(state)
+    result = run_rck_subcommand(
+        getattr(cli, "config", {}) or {},
+        "state",
+        [
+            "add",
+            state.current_trace_id,
+            "--title",
+            "Assisted RCK state",
+            "--kind",
+            "rck.state",
+            "--summary",
+            effective_summary,
+        ],
+    )
+    if result is None:
+        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+        return
+
+    if result.stdout:
+        cli._console_print(result.stdout.rstrip())
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            cli._console_print(f"RCK error: {stderr}")
+        cli._console_print(f"RCK exited with code {result.returncode}")
+        return
+    elif result.stderr:
+        stderr = result.stderr.strip()
+        if stderr:
+            cli._console_print(f"RCK warning: {stderr}")
+
+    state_id = _parse_state_id(result.stdout or "")
+    if not state_id:
+        cli._console_print("Warning: RCK state output did not include StateId.")
+        return
+
+    updated = replace(state, last_state_id=state_id)
+    save_rck_session_state(cli, updated)
+    if not result.stdout:
+        cli._console_print(f"RCK state recorded: {state_id}")
+
+
 def handle_rck_init(
     cli: Any,
     cmd_original: str,

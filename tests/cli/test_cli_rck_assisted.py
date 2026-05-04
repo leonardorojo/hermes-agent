@@ -16,6 +16,7 @@ from hermes_cli.rck_assisted import (
     format_rck_current_state,
     handle_rck_current,
     handle_rck_init,
+    handle_rck_state,
     load_rck_session_state,
     save_rck_session_state,
 )
@@ -201,6 +202,108 @@ class TestRckInit:
         assert db.raw is None
         cli._console_print.assert_called_once()
         assert "RCK CLI not found" in str(cli._console_print.call_args)
+
+
+class TestRckState:
+    def test_state_with_no_active_trace_shows_message_and_does_not_call_subprocess(self):
+        cli = _make_cli()
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            handle_rck_state(cli, "/rck state")
+
+        mock_run.assert_not_called()
+        cli._console_print.assert_called_once()
+        assert "No active RCK trace. Run /rck init first." in str(cli._console_print.call_args)
+
+    def test_state_with_active_trace_calls_state_add_and_persists_state_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-123\n", stderr="")
+            handle_rck_state(cli, '/rck state "Validated assisted state capture through Hermes."')
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[1] == "state"
+        assert args[2] == [
+            "add",
+            "trace-1",
+            "--title",
+            "Assisted RCK state",
+            "--kind",
+            "rck.state",
+            "--summary",
+            "Validated assisted state capture through Hermes.",
+        ]
+        assert kwargs == {}
+        assert json.loads(db.raw)["last_state_id"] == "state-123"
+        assert cli._rck_session_state.last_state_id == "state-123"
+
+    def test_state_with_explicit_add_is_passthrough(self):
+        cli = _make_cli()
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-1\n", stderr="")
+            handle_rck_state(cli, "/rck state add trace-1 --title foo")
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[1] == "state"
+        assert args[2] == ["add", "trace-1", "--title", "foo"]
+        assert kwargs == {}
+        cli._console_print.assert_called_once()
+        assert "StateId: state-1" in str(cli._console_print.call_args)
+
+    def test_state_missing_state_id_warns_without_inventing_one(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="created\n", stderr="")
+            handle_rck_state(cli, "/rck state")
+
+        mock_run.assert_called_once()
+        assert cli._rck_session_state.last_state_id is None
+        assert db.raw is None
+        warning_calls = [call.args[0] for call in cli._console_print.call_args_list]
+        assert any("did not include StateId" in msg for msg in warning_calls)
+
+    def test_current_after_state_shows_last_state_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-123\n", stderr="")
+            handle_rck_state(cli, "/rck state")
+
+        handle_rck_current(cli, "/rck current")
+        output = cli._console_print.call_args.args[0]
+        assert "- last_state_id: state-123" in output
 
 
 class TestRckCliDispatcher:
