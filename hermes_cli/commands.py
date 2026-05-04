@@ -195,8 +195,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("update", "Update Hermes Agent to the latest version", "Info",
                gateway_only=True),
     CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info"),
-    CommandDef("rck", "Delegate to the external RCK CLI (init/status and reserved subcommands)", "Tools & Skills",
-               cli_only=True, args_hint="[init|status|trace|state|anchor|checkpoint|inject]"),
+    CommandDef("rck", "Delegate to the external RCK CLI (current/init and passthrough subcommands)", "Tools & Skills",
+               cli_only=True, args_hint="[current|init|status|trace|state|anchor|checkpoint|inject]"),
 
     # Exit
     CommandDef("quit", "Exit the CLI", "Exit",

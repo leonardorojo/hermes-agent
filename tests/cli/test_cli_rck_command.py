@@ -34,6 +34,7 @@ class TestRckCommandRegistry:
 class TestRckModule:
     def test_allowlist_contains_expected_commands(self):
         assert ALLOWED_RCK_SUBCOMMANDS == {
+            "current",
             "init",
             "status",
             "trace",
@@ -101,13 +102,15 @@ class TestRckCommandDispatch:
         monkeypatch.delenv("RCK_COMMAND", raising=False)
         monkeypatch.delenv("RCK_WORKSPACE", raising=False)
 
-        with patch("hermes_cli.rck.subprocess.run") as mock_run:
+        with patch("hermes_cli.rck_assisted.default_trace_id", return_value="rck-20260504-080910"), patch(
+            "hermes_cli.rck_assisted.default_trace_label", return_value="RCK session 2026-05-04 08:09"
+        ), patch("hermes_cli.rck.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout="initialized\n", stderr="")
             cli_obj._handle_rck_command("/rck init")
 
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args
-        assert args[0] == ["rck", "--workspace", "/home/rufus/.rck", "init"]
+        assert args[0] == ["rck", "--workspace", "/home/rufus/.rck", "trace", "start", "rck-20260504-080910", "--label", "RCK session 2026-05-04 08:09"]
         assert kwargs["shell"] is False
         assert kwargs["capture_output"] is True
         assert kwargs["text"] is True

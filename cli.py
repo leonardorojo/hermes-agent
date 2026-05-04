@@ -28,6 +28,7 @@ import tempfile
 import time
 import uuid
 import textwrap
+import shlex
 from urllib.parse import unquote, urlparse
 from contextlib import contextmanager
 from pathlib import Path
@@ -7602,6 +7603,23 @@ class HermesCLI:
 
     def _handle_rck_command(self, cmd_original: str) -> None:
         from hermes_cli.rck import handle_rck_command
+        from hermes_cli.rck_assisted import handle_rck_current, handle_rck_init
+
+        try:
+            parts = shlex.split(cmd_original)
+        except ValueError:
+            handle_rck_command(self, cmd_original)
+            return
+
+        if len(parts) >= 2:
+            subcommand = parts[1].lstrip("/")
+            if subcommand == "current":
+                handle_rck_current(self, cmd_original)
+                return
+            if subcommand == "init":
+                handle_rck_init(self, cmd_original)
+                return
+
         handle_rck_command(self, cmd_original)
 
     def _show_usage(self):

@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 ALLOWED_RCK_SUBCOMMANDS = {
+    "current",
     "init",
     "status",
     "trace",
@@ -120,11 +121,22 @@ def handle_rck_command(cli: Any, cmd: str) -> None:
         return
 
     if len(parts) < 2:
-        cli._console_print("  Usage: /rck init|status|trace|state|anchor|checkpoint|inject")
+        cli._console_print("  Usage: /rck current|init|status|trace|state|anchor|checkpoint|inject")
         return
 
     subcommand = parts[1].lstrip("/")
     args = parts[2:]
+
+    if subcommand == "current":
+        from hermes_cli.rck_assisted import handle_rck_current
+
+        handle_rck_current(cli, cmd)
+        return
+    if subcommand == "init":
+        from hermes_cli.rck_assisted import handle_rck_init
+
+        handle_rck_init(cli, cmd)
+        return
 
     if subcommand not in ALLOWED_RCK_SUBCOMMANDS:
         cli._console_print(f"  Unsupported RCK subcommand: {subcommand}")
