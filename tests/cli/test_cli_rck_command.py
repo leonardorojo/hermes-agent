@@ -154,6 +154,31 @@ class TestRckCommandDispatch:
         ]
         assert kwargs["shell"] is False
 
+    def test_rck_checkpoint_add_passthrough_uses_subprocess(self):
+        cli_obj = _make_cli({"rck": {"command": "rck", "workspace": "/home/rufus/.rck"}})
+
+        with patch("hermes_cli.rck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-1\nAnchorId: anchor-1\n", stderr="")
+            cli_obj._handle_rck_command('/rck checkpoint add trace-1 --title "Assisted RCK checkpoint" --kind rck.checkpoint --summary "hello"')
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == [
+            "rck",
+            "--workspace",
+            "/home/rufus/.rck",
+            "checkpoint",
+            "add",
+            "trace-1",
+            "--title",
+            "Assisted RCK checkpoint",
+            "--kind",
+            "rck.checkpoint",
+            "--summary",
+            "hello",
+        ]
+        assert kwargs["shell"] is False
+
     def test_rck_anchor_promote_passthrough_uses_subprocess(self):
         cli_obj = _make_cli({"rck": {"command": "rck", "workspace": "/home/rufus/.rck"}})
 

@@ -240,6 +240,29 @@ def _default_state_summary(state: RckSessionState) -> str:
     return "Assisted RCK state"
 
 
+
+def _parse_checkpoint_command(cmd_original: str) -> tuple[bool, str | None]:
+    parts = shlex.split(cmd_original)
+    tokens = parts[2:]
+    if tokens and tokens[0] == "add":
+        return True, None
+    summary = " ".join(tokens).strip()
+    return False, summary or None
+
+
+
+def _default_checkpoint_summary() -> str:
+    return "Checkpoint captured from Hermes assisted /rck checkpoint command."
+
+
+
+def _parse_checkpoint_ids(stdout: str) -> tuple[str | None, str | None]:
+    state_id = _parse_state_id(stdout)
+    anchor_id = _parse_anchor_id(stdout)
+    return state_id, anchor_id
+
+
+
 def handle_rck_state(cli: Any, cmd_original: str) -> None:
     """Handle `/rck state` as an assisted state snapshot helper."""
     try:
@@ -389,6 +412,91 @@ def handle_rck_anchor(cli: Any, cmd_original: str) -> None:
     save_rck_session_state(cli, updated)
     if not result.stdout:
         cli._console_print(f"RCK anchor recorded: {anchor_id}")
+
+
+
+def handle_rck_checkpoint(cli: Any, cmd_original: str) -> None:
+    """Handle `/rck checkpoint` as an assisted checkpoint capture helper."""
+    try:
+        parts = shlex.split(cmd_original)
+        is_passthrough, summary = _parse_checkpoint_command(cmd_original)
+    except ValueError as exc:
+        cli._console_print(f"Invalid /rck command: {exc}")
+        return
+
+    if is_passthrough:
+        result = run_rck_subcommand(getattr(cli, "config", {}) or {}, "checkpoint", parts[2:])
+        if result is None:
+            cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+            return
+        if result.stdout:
+            cli._console_print(result.stdout.rstrip())
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                cli._console_print(f"RCK error: {stderr}")
+            cli._console_print(f"RCK exited with code {result.returncode}")
+        elif result.stderr:
+            stderr = result.stderr.strip()
+            if stderr:
+                cli._console_print(f"RCK warning: {stderr}")
+        return
+
+    state = load_rck_session_state(cli)
+    if not state.current_trace_id:
+        cli._console_print("No active RCK trace. Run /rck init first.")
+        return
+
+    effective_summary = summary or _default_checkpoint_summary()
+    result = run_rck_subcommand(
+        getattr(cli, "config", {}) or {},
+        "checkpoint",
+        [
+            "add",
+            state.current_trace_id,
+            "--title",
+            "Assisted RCK checkpoint",
+            "--kind",
+            "rck.checkpoint",
+            "--summary",
+            effective_summary,
+        ],
+    )
+    if result is None:
+        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+        return
+
+    if result.stdout:
+        cli._console_print(result.stdout.rstrip())
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            cli._console_print(f"RCK error: {stderr}")
+        cli._console_print(f"RCK exited with code {result.returncode}")
+        return
+    elif result.stderr:
+        stderr = result.stderr.strip()
+        if stderr:
+            cli._console_print(f"RCK warning: {stderr}")
+
+    state_id, anchor_id = _parse_checkpoint_ids(result.stdout or "")
+    if not state_id and not anchor_id:
+        cli._console_print("Warning: RCK checkpoint output did not include StateId or AnchorId.")
+        return
+
+    updated = state
+    if state_id:
+        updated = replace(updated, last_state_id=state_id)
+    if anchor_id:
+        updated = replace(updated, last_anchor_id=anchor_id)
+    save_rck_session_state(cli, updated)
+
+    if state_id and anchor_id:
+        cli._console_print(f"RCK checkpoint recorded: StateId={state_id} AnchorId={anchor_id}")
+    elif state_id:
+        cli._console_print("Warning: RCK checkpoint output did not include AnchorId.")
+    elif anchor_id:
+        cli._console_print("Warning: RCK checkpoint output did not include StateId.")
 
 
 

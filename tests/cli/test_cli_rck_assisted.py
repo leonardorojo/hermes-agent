@@ -15,6 +15,7 @@ from hermes_cli.rck_assisted import (
     derive_label_from_trace_id,
     format_rck_current_state,
     handle_rck_anchor,
+    handle_rck_checkpoint,
     handle_rck_current,
     handle_rck_init,
     handle_rck_state,
@@ -443,6 +444,177 @@ class TestRckAnchor:
 
         handle_rck_current(cli, "/rck current")
         output = cli._console_print.call_args.args[0]
+        assert "- last_anchor_id: anchor-123" in output
+
+
+class TestRckCheckpoint:
+    def test_checkpoint_with_no_active_trace_shows_message_and_does_not_call_subprocess(self):
+        cli = _make_cli()
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        mock_run.assert_not_called()
+        cli._console_print.assert_called_once()
+        assert "No active RCK trace. Run /rck init first." in str(cli._console_print.call_args)
+
+    def test_checkpoint_with_active_trace_calls_checkpoint_add_and_persists_both_ids(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout="Added checkpoint to trace 'trace-1'.\nAnchorId: anchor-123\nStateId: state-123\n",
+                stderr="",
+            )
+            handle_rck_checkpoint(cli, '/rck checkpoint "Validated checkpoint capture through Hermes."')
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[1] == "checkpoint"
+        assert args[2] == [
+            "add",
+            "trace-1",
+            "--title",
+            "Assisted RCK checkpoint",
+            "--kind",
+            "rck.checkpoint",
+            "--summary",
+            "Validated checkpoint capture through Hermes.",
+        ]
+        assert kwargs == {}
+        saved = json.loads(db.raw)
+        assert saved["last_state_id"] == "state-123"
+        assert saved["last_anchor_id"] == "anchor-123"
+        assert cli._rck_session_state.last_state_id == "state-123"
+        assert cli._rck_session_state.last_anchor_id == "anchor-123"
+
+    def test_checkpoint_without_summary_uses_default_summary(self):
+        cli = _make_cli()
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-123\nAnchorId: anchor-123\n", stderr="")
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        args, kwargs = mock_run.call_args
+        assert args[2] == [
+            "add",
+            "trace-1",
+            "--title",
+            "Assisted RCK checkpoint",
+            "--kind",
+            "rck.checkpoint",
+            "--summary",
+            "Checkpoint captured from Hermes assisted /rck checkpoint command.",
+        ]
+        assert kwargs == {}
+
+    def test_checkpoint_with_only_state_id_updates_only_state_and_warns_about_anchor_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-123\n", stderr="")
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        assert cli._rck_session_state.last_state_id == "state-123"
+        assert cli._rck_session_state.last_anchor_id is None
+        saved = json.loads(db.raw)
+        assert saved["last_state_id"] == "state-123"
+        assert saved["last_anchor_id"] is None
+        warnings = [call.args[0] for call in cli._console_print.call_args_list]
+        assert any("did not include AnchorId" in msg for msg in warnings)
+
+    def test_checkpoint_with_only_anchor_id_updates_only_anchor_and_warns_about_state_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="AnchorId: anchor-123\n", stderr="")
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        assert cli._rck_session_state.last_state_id is None
+        assert cli._rck_session_state.last_anchor_id == "anchor-123"
+        saved = json.loads(db.raw)
+        assert saved["last_state_id"] is None
+        assert saved["last_anchor_id"] == "anchor-123"
+        warnings = [call.args[0] for call in cli._console_print.call_args_list]
+        assert any("did not include StateId" in msg for msg in warnings)
+
+    def test_checkpoint_with_no_ids_warns_and_leaves_session_ids_unchanged(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id="state-old",
+            last_anchor_id="anchor-old",
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="created\n", stderr="")
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        assert cli._rck_session_state.last_state_id == "state-old"
+        assert cli._rck_session_state.last_anchor_id == "anchor-old"
+        assert db.raw is None
+        warnings = [call.args[0] for call in cli._console_print.call_args_list]
+        assert any("did not include StateId or AnchorId" in msg for msg in warnings)
+
+    def test_current_after_checkpoint_shows_last_state_id_and_last_anchor_id(self):
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
+        cli._rck_session_state = RckSessionState(
+            workspace="/home/rufus/.rck",
+            current_trace_id="trace-1",
+            current_trace_label="Trace 1",
+            last_state_id=None,
+            last_anchor_id=None,
+            pending_injection=False,
+        )
+
+        with patch("hermes_cli.rck_assisted.run_rck_subcommand") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="StateId: state-123\nAnchorId: anchor-123\n", stderr="")
+            handle_rck_checkpoint(cli, "/rck checkpoint")
+
+        handle_rck_current(cli, "/rck current")
+        output = cli._console_print.call_args.args[0]
+        assert "- last_state_id: state-123" in output
         assert "- last_anchor_id: anchor-123" in output
 
 
