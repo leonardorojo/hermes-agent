@@ -262,8 +262,21 @@ def _parse_checkpoint_ids(stdout: str) -> tuple[str | None, str | None]:
     return state_id, anchor_id
 
 
+def _parse_inject_command(cmd_original: str) -> str | None:
+    parts = shlex.split(cmd_original)
+    tokens = parts[2:]
+    if not tokens:
+        return None
+    if len(tokens) > 1:
+        raise ValueError(f"Unsupported /rck inject arguments: {' '.join(tokens[1:])}")
+    trace_id = tokens[0]
+    if trace_id.startswith("-"):
+        raise ValueError(f"Unsupported /rck inject arguments: {trace_id}")
+    return trace_id
+
 
 def handle_rck_state(cli: Any, cmd_original: str) -> None:
+
     """Handle `/rck state` as an assisted state snapshot helper."""
     try:
         parts = shlex.split(cmd_original)
@@ -497,6 +510,79 @@ def handle_rck_checkpoint(cli: Any, cmd_original: str) -> None:
         cli._console_print("Warning: RCK checkpoint output did not include AnchorId.")
     elif anchor_id:
         cli._console_print("Warning: RCK checkpoint output did not include StateId.")
+
+
+
+def handle_rck_inject(cli: Any, cmd_original: str) -> None:
+    """Handle `/rck inject` as an assisted trace injection helper."""
+    try:
+        explicit_trace_id = _parse_inject_command(cmd_original)
+    except ValueError as exc:
+        cli._console_print(f"Invalid /rck command: {exc}")
+        return
+
+    state = load_rck_session_state(cli)
+    trace_id = explicit_trace_id or state.current_trace_id
+    if not trace_id:
+        cli._console_print("No active RCK trace. Run /rck init first.")
+        return
+
+    result = run_rck_subcommand(
+        getattr(cli, "config", {}) or {},
+        "trace",
+        ["inject", trace_id],
+    )
+    if result is None:
+        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+        return
+
+    if result.stdout:
+        cli._console_print(result.stdout.rstrip())
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            cli._console_print(f"RCK error: {stderr}")
+        cli._console_print(f"RCK exited with code {result.returncode}")
+    elif result.stderr:
+        stderr = result.stderr.strip()
+        if stderr:
+            cli._console_print(f"RCK warning: {stderr}")
+
+
+def handle_rck_inject(cli: Any, cmd_original: str) -> None:
+    """Handle `/rck inject` as an assisted trace injection helper."""
+    try:
+        explicit_trace_id = _parse_inject_command(cmd_original)
+    except ValueError as exc:
+        cli._console_print(f"Invalid /rck command: {exc}")
+        return
+
+    state = load_rck_session_state(cli)
+    trace_id = explicit_trace_id or state.current_trace_id
+    if not trace_id:
+        cli._console_print("No active RCK trace. Run /rck init first.")
+        return
+
+    result = run_rck_subcommand(
+        getattr(cli, "config", {}) or {},
+        "trace",
+        ["inject", trace_id],
+    )
+    if result is None:
+        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
+        return
+
+    if result.stdout:
+        cli._console_print(result.stdout, markup=False, end="")
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            cli._console_print(f"RCK error: {stderr}")
+        cli._console_print(f"RCK exited with code {result.returncode}")
+    elif result.stderr:
+        stderr = result.stderr.strip()
+        if stderr:
+            cli._console_print(f"RCK warning: {stderr}")
 
 
 

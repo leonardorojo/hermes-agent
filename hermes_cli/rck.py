@@ -209,6 +209,12 @@ def handle_rck_command(cli: Any, cmd: str) -> None:
         handle_rck_checkpoint(cli, cmd)
         return
 
+    if subcommand == "inject":
+        from hermes_cli.rck_assisted import handle_rck_inject
+
+        handle_rck_inject(cli, cmd)
+        return
+
     if subcommand not in ALLOWED_RCK_SUBCOMMANDS:
         cli._console_print(f"  Unsupported RCK subcommand: {subcommand}")
         return

@@ -179,6 +179,26 @@ class TestRckCommandDispatch:
         ]
         assert kwargs["shell"] is False
 
+    def test_rck_inject_assisted_uses_current_trace_id_and_trace_subcommand(self):
+        cli_obj = _make_cli({"rck": {"command": "rck", "workspace": "/home/rufus/.rck"}})
+
+        with patch("hermes_cli.rck_assisted.handle_rck_inject") as mock_inject:
+            cli_obj._handle_rck_command("/rck inject")
+
+        mock_inject.assert_called_once()
+
+    def test_rck_inject_trace_passthrough_uses_subprocess(self):
+        cli_obj = _make_cli({"rck": {"command": "rck", "workspace": "/home/rufus/.rck"}})
+
+        with patch("hermes_cli.rck.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="# Trace Condensed\n", stderr="")
+            cli_obj._handle_rck_command("/rck trace inject trace-1")
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert args[0] == ["rck", "--workspace", "/home/rufus/.rck", "trace", "inject", "trace-1"]
+        assert kwargs["shell"] is False
+
     def test_rck_anchor_promote_passthrough_uses_subprocess(self):
         cli_obj = _make_cli({"rck": {"command": "rck", "workspace": "/home/rufus/.rck"}})
 
