@@ -10898,6 +10898,15 @@ class AIAgent:
                             _injections.append(_fenced)
                     if _plugin_user_context:
                         _injections.append(_plugin_user_context)
+                    if self._session_db:
+                        try:
+                            from hermes_cli.rck_assisted import consume_rck_pending_injection
+                            _rck_pending_injection = consume_rck_pending_injection(self._session_db)
+                        except Exception:
+                            _rck_pending_injection = None
+                        else:
+                            if _rck_pending_injection:
+                                _injections.append(_rck_pending_injection)
                     if _injections:
                         _base = api_msg.get("content", "")
                         if isinstance(_base, str):

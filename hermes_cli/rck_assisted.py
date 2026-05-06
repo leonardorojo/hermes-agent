@@ -26,7 +26,7 @@ class RckSessionState:
     current_trace_label: str | None = None
     last_state_id: str | None = None
     last_anchor_id: str | None = None
-    pending_injection: bool = False
+    pending_injection: str | None = None
 
     @classmethod
     def from_raw(cls, raw: Any, workspace: str) -> "RckSessionState":
@@ -45,13 +45,23 @@ class RckSessionState:
         if not payload:
             return cls(workspace=workspace)
 
+        pending_injection = payload.get("pending_injection")
+        if isinstance(pending_injection, str):
+            pending_injection = pending_injection if pending_injection.strip() else None
+        elif pending_injection is True:
+            pending_injection = True
+        elif pending_injection is False:
+            pending_injection = False
+        else:
+            pending_injection = None
+
         return cls(
             workspace=str(payload.get("workspace") or workspace),
             current_trace_id=_empty_to_none(payload.get("current_trace_id")),
             current_trace_label=_empty_to_none(payload.get("current_trace_label")),
             last_state_id=_empty_to_none(payload.get("last_state_id")),
             last_anchor_id=_empty_to_none(payload.get("last_anchor_id")),
-            pending_injection=bool(payload.get("pending_injection", False)),
+            pending_injection=pending_injection,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,13 +94,6 @@ def _state_db(cli: Any) -> Any:
 def load_rck_session_state(cli: Any, workspace: str | None = None) -> RckSessionState:
     """Load the operational RCK state from cache or the session meta store."""
     resolved_workspace = workspace or resolve_rck_workspace(getattr(cli, "config", {}) or {})
-    cached_state = getattr(cli, "_rck_session_state", None)
-    if isinstance(cached_state, RckSessionState):
-        if workspace is not None and cached_state.workspace != resolved_workspace:
-            cached_state = replace(cached_state, workspace=resolved_workspace)
-            setattr(cli, "_rck_session_state", cached_state)
-        return cached_state
-
     session_db = _state_db(cli)
     raw = None
     if session_db is not None:
@@ -98,6 +101,13 @@ def load_rck_session_state(cli: Any, workspace: str | None = None) -> RckSession
             raw = session_db.get_meta(RCK_SESSION_META_KEY)
         except Exception:
             raw = None
+
+    cached_state = getattr(cli, "_rck_session_state", None)
+    if raw is None and isinstance(cached_state, RckSessionState):
+        if workspace is not None and cached_state.workspace != resolved_workspace:
+            cached_state = replace(cached_state, workspace=resolved_workspace)
+            setattr(cli, "_rck_session_state", cached_state)
+        return cached_state
 
     state = RckSessionState.from_raw(raw, workspace=resolved_workspace)
     if workspace is not None and state.workspace != resolved_workspace:
@@ -537,53 +547,77 @@ def handle_rck_inject(cli: Any, cmd_original: str) -> None:
         return
 
     if result.stdout:
-        cli._console_print(result.stdout.rstrip())
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        if stderr:
-            cli._console_print(f"RCK error: {stderr}")
-        cli._console_print(f"RCK exited with code {result.returncode}")
-    elif result.stderr:
-        stderr = result.stderr.strip()
-        if stderr:
-            cli._console_print(f"RCK warning: {stderr}")
-
-
-def handle_rck_inject(cli: Any, cmd_original: str) -> None:
-    """Handle `/rck inject` as an assisted trace injection helper."""
-    try:
-        explicit_trace_id = _parse_inject_command(cmd_original)
-    except ValueError as exc:
-        cli._console_print(f"Invalid /rck command: {exc}")
-        return
-
-    state = load_rck_session_state(cli)
-    trace_id = explicit_trace_id or state.current_trace_id
-    if not trace_id:
-        cli._console_print("No active RCK trace. Run /rck init first.")
-        return
-
-    result = run_rck_subcommand(
-        getattr(cli, "config", {}) or {},
-        "trace",
-        ["inject", trace_id],
-    )
-    if result is None:
-        cli._console_print(f"RCK CLI not found: {resolve_rck_command(getattr(cli, 'config', {}) or {})}")
-        return
-
-    if result.stdout:
         cli._console_print(result.stdout, markup=False, end="")
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         if stderr:
             cli._console_print(f"RCK error: {stderr}")
         cli._console_print(f"RCK exited with code {result.returncode}")
+        return
     elif result.stderr:
         stderr = result.stderr.strip()
         if stderr:
             cli._console_print(f"RCK warning: {stderr}")
 
+    trace_condensed = (result.stdout or "").strip()
+    if not trace_condensed:
+        cli._console_print("Warning: RCK trace inject output did not include Trace Condensed.")
+        return
+
+    updated = replace(state, pending_injection=build_rck_memory_block(trace_condensed))
+    save_rck_session_state(cli, updated)
+    cli._console_print("RCK memory prepared for next prompt.")
+
+
+RCK_MEMORY_BLOCK_HEADER = """RCK_MEMORY_BLOCK v0.1
+
+Interpretation:
+Trace = current work DAG.
+State = recorded snapshot.
+Delta = derived transition between states.
+Anchor = promoted decision/constraint; treat as binding unless superseded.
+
+Rules:
+- Use anchors as operational constraints.
+- Use states as historical context.
+- Use deltas only if present; do not invent them.
+- Do not infer missing states, deltas, anchors, gates, policies, or discarded paths.
+- If applicability is unclear, say so before acting.
+
+Payload:
+
+"""
+
+
+def build_rck_memory_block(trace_condensed: str) -> str:
+    payload = (trace_condensed or "").strip()
+    if not payload:
+        return ""
+    return f"{RCK_MEMORY_BLOCK_HEADER}{payload}\n"
+
+
+def consume_rck_pending_injection(session_db: Any) -> str | None:
+    if session_db is None:
+        return None
+    try:
+        raw = session_db.get_meta(RCK_SESSION_META_KEY)
+    except Exception:
+        return None
+
+    state = RckSessionState.from_raw(raw, workspace=resolve_rck_workspace())
+    payload = state.pending_injection
+    if not isinstance(payload, str) or not payload.strip():
+        return None
+
+    updated = replace(state, pending_injection=None)
+    try:
+        session_db.set_meta(
+            RCK_SESSION_META_KEY,
+            json.dumps(updated.to_dict(), ensure_ascii=False, sort_keys=True),
+        )
+    except Exception:
+        return payload
+    return payload
 
 
 def handle_rck_init(
@@ -637,7 +671,7 @@ def handle_rck_init(
         workspace=workspace,
         current_trace_id=trace_id,
         current_trace_label=label,
-        pending_injection=False,
+        pending_injection=None,
     )
     save_rck_session_state(cli, updated)
     if not result.stdout:

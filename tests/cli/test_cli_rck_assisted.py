@@ -11,6 +11,8 @@ from cli import HermesCLI
 from hermes_cli.rck_assisted import (
     RCK_SESSION_META_KEY,
     RckSessionState,
+    build_rck_memory_block,
+    consume_rck_pending_injection,
     default_trace_id,
     derive_label_from_trace_id,
     format_rck_current_state,
@@ -120,6 +122,7 @@ class TestRckCurrent:
         assert "- pending_injection: false" in output
 
     def test_current_reads_persisted_state(self):
+        pending = build_rck_memory_block("# Trace Condensed\ntrace_id: trace-1\n")
         db = FakeSessionDB(
             raw=json.dumps(
                 {
@@ -128,7 +131,7 @@ class TestRckCurrent:
                     "current_trace_label": "My Feature",
                     "last_state_id": "state-1",
                     "last_anchor_id": "anchor-1",
-                    "pending_injection": True,
+                    "pending_injection": pending,
                 }
             )
         )
@@ -673,14 +676,17 @@ class TestRckInject:
         assert args[1] == "trace"
         assert args[2] == ["inject", "trace-1"]
         assert kwargs == {}
-        assert db.raw is None
+        assert db.raw is not None
+        saved = json.loads(db.raw)
+        assert saved["pending_injection"].startswith("RCK_MEMORY_BLOCK v0.1")
+        assert "# Trace Condensed" in saved["pending_injection"]
         assert cli._rck_session_state.last_state_id == "state-1"
         assert cli._rck_session_state.last_anchor_id == "anchor-1"
-        cli._console_print.assert_called_once()
-        assert "# Trace Condensed" in cli._console_print.call_args.args[0]
+        cli._console_print.assert_any_call("RCK memory prepared for next prompt.")
 
     def test_inject_with_explicit_trace_id_uses_that_trace_id(self):
-        cli = _make_cli()
+        db = FakeSessionDB()
+        cli = _make_cli({}, db)
         cli._rck_session_state = RckSessionState(
             workspace="/home/rufus/.rck",
             current_trace_id="trace-current",
@@ -698,8 +704,12 @@ class TestRckInject:
         args, kwargs = mock_run.call_args
         assert args[2] == ["inject", "manual-rck-test-001"]
         assert kwargs == {}
+        saved = json.loads(db.raw)
+        assert saved["pending_injection"].startswith("RCK_MEMORY_BLOCK v0.1")
+        assert "# Trace Condensed" in saved["pending_injection"]
+        assert cli._rck_session_state.current_trace_id == "trace-current"
 
-    def test_inject_prints_stdout_unchanged(self):
+    def test_inject_prints_stdout_and_confirmation(self):
         cli = _make_cli()
         cli._rck_session_state = RckSessionState(
             workspace="/home/rufus/.rck",
@@ -715,5 +725,29 @@ class TestRckInject:
             mock_run.return_value = MagicMock(returncode=0, stdout=stdout, stderr="")
             handle_rck_inject(cli, "/rck inject")
 
-        assert cli._console_print.call_args.args[0] == stdout
-        assert cli._console_print.call_args.kwargs == {"markup": False, "end": ""}
+        assert cli._console_print.call_args_list[0].args[0] == stdout
+        assert cli._console_print.call_args_list[0].kwargs == {"markup": False, "end": ""}
+        assert cli._console_print.call_args_list[-1].args[0] == "RCK memory prepared for next prompt."
+
+    def test_consume_pending_injection_is_one_shot_and_clears_meta(self):
+        pending = build_rck_memory_block("# Trace Condensed\ntrace_id: trace-1\n")
+        db = FakeSessionDB(
+            raw=json.dumps(
+                {
+                    "workspace": "/tmp/rck",
+                    "current_trace_id": "trace-1",
+                    "current_trace_label": "Trace 1",
+                    "last_state_id": "state-1",
+                    "last_anchor_id": "anchor-1",
+                    "pending_injection": pending,
+                }
+            )
+        )
+
+        first = consume_rck_pending_injection(db)
+        second = consume_rck_pending_injection(db)
+
+        assert first == pending
+        assert second is None
+        saved = json.loads(db.raw)
+        assert saved["pending_injection"] is None
